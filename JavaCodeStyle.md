@@ -32,13 +32,16 @@ my-application/
 │       ├── usecase/            # Use case implementations
 │       └── service/            # Application services (orchestration)
 ├── infrastructure/              # Technical implementation module
-│   ├── pom.xml                  # Infrastructure module dependencies
-│   └── src/main/java/com/company/product/infrastructure/
-│       ├── adapter/
-│       │   ├── in/             # Primary adapters (REST controllers, message listeners)
-│       │   └── out/            # Secondary adapters (database, external API clients)
-│       ├── persistence/        # JPA entities, repositories
-│       └── configuration/      # Spring configuration classes
+|   └── rest-adapter
+|   |   ├── pom.xml 
+│   |   └── src/main/java/com/company/product/rest-adapter/ # REST controllers, dtos etc.
+|   └── database-adapter
+|   |   ├── pom.xml 
+│   |   └── src/main/java/com/company/product/database-adapter/ # JPA entities, repositories etc.
+|   └── messaging-adapter
+|       ├── pom.xml 
+│       └── src/main/java/com/company/product/messaging-adapter/ # Producers, consumers etc.
+│      
 └── bootstrap/                   # Application entry point module
     ├── pom.xml                  # Bootstrap module dependencies (includes all modules)
     └── src/main/java/com/company/product/
