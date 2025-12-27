@@ -23,14 +23,14 @@ my-application/
 │   └── src/main/java/com/company/product/domain/
 │       ├── model/               # Domain entities, value objects, aggregates
 │       ├── service/             # Domain services and business rules
-│       └── port/                # ALL port interfaces
-│           ├── in/             # Input ports (use case interfaces)
-│           └── out/            # Output ports (repository, external service interfaces)
 ├── application/                  # Use case implementations module
 │   ├── pom.xml                  # Application module dependencies
 │   └── src/main/java/com/company/product/application/
 │       ├── usecase/            # Use case implementations
 │       └── service/            # Application services (orchestration)
+│       └── port/                # ALL port interfaces
+│           ├── in/             # Input ports (use case interfaces)
+│           └── out/            # Output ports (repository, external service interfaces)
 ├── infrastructure/              # Technical implementation module
 |   └── rest-adapter
 |   |   ├── pom.xml 
@@ -121,10 +121,10 @@ my-application/
     <packaging>jar</packaging>
     
     <dependencies>
-        <!-- Domain dependency -->
+        <!-- Application dependency -->
         <dependency>
             <groupId>com.company</groupId>
-            <artifactId>product-service-domain</artifactId>
+            <artifactId>product-service-application</artifactId>
         </dependency>
         
         <!-- Spring Boot starters -->
@@ -186,10 +186,6 @@ my-application/
         <!-- All module dependencies -->
         <dependency>
             <groupId>com.company</groupId>
-            <artifactId>product-service-domain</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.company</groupId>
             <artifactId>product-service-application</artifactId>
         </dependency>
         <dependency>
@@ -215,24 +211,21 @@ my-application/
 **❌ INCORRECT: Ports in both domain and application layers**
 ```
 ├── domain/
-│   └── port/              # ❌ Ports here AND...
-├── application/           
-│   ├── port/             # ❌ ...also here is WRONG!
-│   └── service/          
+│   └── port/              # ❌ Ports here
 ```
 
 **✅ CORRECT: Ports only in domain layer**
 ```
 ├── domain/                # The Hexagon - Business Logic Core
-│   ├── model/            # Domain entities, value objects
-│   ├── service/          # Domain services
-│   └── port/             # ✅ ALL ports defined here only
-│       ├── in/          # Input ports (use case interfaces)
-│       └── out/         # Output ports (repository, external service interfaces)
-├── application/          # Use Case Implementations
-│   └── usecase/         # ✅ Implements input ports from domain
-└── infrastructure/       # Adapters
-    └── adapter/         # ✅ Implements output ports from domain
+│   ├── model/             # Domain entities, value objects
+│   ├── service/           # Domain services
+├── application/           # Use Case Implementations
+│   └── usecase/           # ✅ Implements input ports from domain
+│   └── port/              # ✅ ALL ports defined here only
+│       ├── in/            # Input ports (use case interfaces)
+│       └── out/           # Output ports (repository, external service interfaces)
+└── infrastructure/        # Adapters
+    └── adapter/           # ✅ Implements output ports from domain
 ```
 
 **Why this matters (from authoritative sources):**
@@ -247,11 +240,7 @@ my-application/
 ```
 Infrastructure Layer
      ↓ implements
-Domain Ports (interfaces)
-     ↑ uses
-Application Layer (use case implementations)
-     ↓ implements  
-Domain Ports (interfaces)
+Application Layer (Input and Output ports)
      ↑ defined in
 Domain Layer (business logic)
 ```
@@ -259,7 +248,7 @@ Domain Layer (business logic)
 **Practical example of correct dependency flow:**
 ```java
 // 1. Domain Layer - Port Definition (Interface)
-package com.company.domain.port.out;
+package com.company.application.port.out;
 public interface OrderRepository {
     Order save(Order order);
     Optional<Order> findById(OrderId id);
@@ -267,6 +256,9 @@ public interface OrderRepository {
 
 // 2. Application Layer - Uses Domain Port
 package com.company.application.usecase;
+
+import com.company.application.port.out;
+
 public class PlaceOrderUseCaseImpl implements PlaceOrderUseCase {
     private final OrderRepository orderRepository; // ← Uses domain port
     
@@ -278,6 +270,9 @@ public class PlaceOrderUseCaseImpl implements PlaceOrderUseCase {
 
 // 3. Infrastructure Layer - Implements Domain Port
 package com.company.infrastructure.adapter.out.persistence;
+
+import com.company.application.port.out;
+
 @Repository
 public class JpaOrderRepository implements OrderRepository { // ← Implements domain port
     // JPA-specific implementation
@@ -296,7 +291,6 @@ project-root/
 ├── domain/                 # Pure domain logic (no Spring dependencies)
 │   ├── model/             # Domain entities and value objects
 │   ├── service/           # Domain services and business logic
-│   └── port/              # Input and output port interfaces
 ├── application/           # Application layer
 │   ├── usecase/          # Use case implementations
 │   ├── port/             # Port definitions
@@ -322,15 +316,15 @@ com.company.product/
 │   │   └── OrderStatus.java           # Domain enum
 │   ├── service/
 │   │   └── OrderDomainService.java    # Domain service
+├── application/                        # Use Case Implementations
+│   └── usecase/
+│       └── PlaceOrderUseCaseImpl.java  # Implements input port
 │   └── port/
 │       ├── in/
 │       │   └── PlaceOrderUseCase.java  # Input port interface
 │       └── out/
 │           ├── OrderRepository.java    # Output port interface
 │           └── PaymentService.java     # Output port interface
-├── application/                        # Use Case Implementations
-│   └── usecase/
-│       └── PlaceOrderUseCaseImpl.java  # Implements input port
 └── infrastructure/                     # Adapters
     ├── adapter/
     │   ├── in/
@@ -401,9 +395,6 @@ plugins {
 }
 
 dependencies {
-    // Domain dependency
-    implementation(project(":domain"))
-    
     // Minimal Spring for DI
     implementation("org.springframework:spring-context")
     
@@ -421,9 +412,6 @@ plugins {
 }
 
 dependencies {
-    // Domain dependency
-    implementation(project(":domain"))
-    
     // Spring Boot starters (excluding default logging)
     implementation("org.springframework.boot:spring-boot-starter-web") {
         exclude(group = "org.springframework.boot", module = "spring-boot-starter-logging")
@@ -455,13 +443,6 @@ dependencies {
 plugins {
     id("org.springframework.boot")
     id("io.spring.dependency-management")
-}
-
-dependencies {
-    // All module dependencies
-    implementation(project(":domain"))
-    implementation(project(":application"))
-    implementation(project(":infrastructure"))
 }
 
 tasks.bootJar {
@@ -554,63 +535,6 @@ public class ApplicationConfiguration {
 - **Deployment Flexibility**: Modules can be deployed as separate artifacts if needed
 - **Team Boundaries**: Different teams can own different modules
 - **Dependency Enforcement**: Impossible to accidentally create circular dependencies
-
-**Practical example of modules working together:**
-```java
-// Domain Module - Pure business logic with ports
-package com.company.product.domain.port.in;
-public interface PlaceOrderUseCase {
-    OrderResult placeOrder(PlaceOrderCommand command);
-}
-
-package com.company.product.domain.port.out;
-public interface OrderRepository {
-    Order save(Order order);
-}
-
-// Application Module - Use case implementation
-package com.company.product.application.usecase;
-@Component
-public class PlaceOrderUseCaseImpl implements PlaceOrderUseCase {
-    private final OrderRepository orderRepository; // Domain port injection
-    
-    @Override
-    public OrderResult placeOrder(PlaceOrderCommand command) {
-        // Business logic using domain ports
-    }
-}
-
-// Infrastructure Module - Adapter implementations
-package com.company.product.infrastructure.adapter.out.persistence;
-@Repository
-public class JpaOrderRepository implements OrderRepository {
-    // JPA implementation of domain port
-}
-
-package com.company.product.infrastructure.adapter.in.web;
-@RestController
-public class OrderController {
-    private final PlaceOrderUseCase placeOrderUseCase; // Domain port injection
-    
-    @PostMapping("/orders")
-    public ResponseEntity<OrderResponse> placeOrder(@RequestBody CreateOrderRequest request) {
-        // Calls domain use case
-    }
-}
-
-// Bootstrap Module - Application assembly
-package com.company.product;
-@SpringBootApplication
-@ComponentScan(basePackages = {
-    "com.company.product.application",
-    "com.company.product.infrastructure"
-})
-public class Application {
-    public static void main(String[] args) {
-        SpringApplication.run(Application.class, args);
-    }
-}
-```
 
 ## Modern naming conventions
 
