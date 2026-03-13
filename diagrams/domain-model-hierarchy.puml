@@ -1,0 +1,121 @@
+@startuml domain-model-hierarchy
+
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+skinparam shadowing false
+skinparam defaultFontName "JetBrains Mono"
+skinparam packageStyle rectangle
+
+title Иерархия базовых классов доменной модели
+
+package "Domain Model Base" <<Frame>> {
+
+    abstract class "BaseId<T>" as BaseId << (A,#FFAAAA) abstract >> {
+        - value : T {final}
+        # BaseId(value : T)
+        + getValue() : T
+        + equals(o : Object) : boolean
+        + hashCode() : int
+    }
+    note right of BaseId
+        Типизированный идентификатор.
+        Исключает подмену id
+        разных агрегатов на уровне типов.
+    end note
+
+    abstract class "BaseEntity<T>" as BaseEntity << (A,#FFAAAA) abstract >> {
+        - id : T
+        + getId() : T
+        + setId(id : T) : void
+        + equals(o : Object) : boolean
+        + hashCode() : int
+    }
+    note right of BaseEntity
+        @SuperBuilder
+        equals/hashCode по id.
+    end note
+
+    abstract class "AggregateRoot<T>" as AggregateRoot << (A,#FFAAAA) abstract >> {
+    }
+    note right of AggregateRoot
+        @SuperBuilder
+        Маркер корня агрегата.
+        Граница транзакционной
+        консистентности.
+    end note
+
+    interface DomainEvent << (I,#AAAAFF) interface >> {
+        + fire() : void
+    }
+
+    interface "DomainEventPublisher<T>" as DomainEventPublisher << (I,#AAAAFF) interface >> {
+        + publish(domainEvent : T) : void
+    }
+
+    class EmptyEvent << (S,#AAFFAA) singleton >> {
+        + {static} INSTANCE : EmptyEvent
+        - EmptyEvent()
+        + fire() : void
+    }
+    note right of EmptyEvent
+        Заглушка для операций
+        без событий. Singleton.
+    end note
+
+    BaseEntity --|> "Serializable"
+    AggregateRoot --|> BaseEntity
+    BaseId --|> "Serializable"
+    EmptyEvent ..|> DomainEvent
+}
+
+package "Payment Aggregate" <<Frame>> {
+
+    class PaymentId {
+        + PaymentId(value : UUID)
+        + {static} generate() : PaymentId
+    }
+
+    class Payment {
+        - amount : Money {final}
+        - customerId : CustomerId {final}
+        - status : PaymentStatus
+        + {static} create(amount, customerId) : Payment
+        + confirm() : void
+        + cancel() : void
+    }
+    note right of Payment
+        @Getter @SuperBuilder
+        Богатая модель с
+        бизнес-логикой.
+    end note
+
+    abstract class PaymentEvent << (A,#FFAAAA) abstract >> {
+        - payment : Payment {final}
+        - createdAt : LocalDateTime {final}
+    }
+    note right of PaymentEvent
+        @Getter @ToString
+        @RequiredArgsConstructor
+        Базовое событие агрегата.
+    end note
+
+    class PaymentCreatedEvent {
+        - publisher : DomainEventPublisher<PaymentCreatedEvent>
+        + fire() : void
+    }
+
+    interface PaymentCreatedMessagePublisher << (I,#AAAAFF) port >> {
+    }
+    note right of PaymentCreatedMessagePublisher
+        Порт (application/ports/out).
+        Реализуется в infrastructure.
+    end note
+
+    PaymentId --|> BaseId
+    Payment --|> AggregateRoot
+    PaymentEvent ..|> DomainEvent
+    PaymentCreatedEvent --|> PaymentEvent
+    PaymentCreatedMessagePublisher --|> DomainEventPublisher
+}
+
+@enduml
