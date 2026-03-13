@@ -190,7 +190,6 @@ public class Order {
         order.lines = List.copyOf(lines);
         order.status = OrderStatus.CREATED;
         order.totalPrice = order.calculateTotal();
-        order.registerEvent(new OrderCreatedEvent(order.id));
         return order;
     }
 
@@ -200,7 +199,6 @@ public class Order {
             throw new DomainException("Cannot cancel shipped order");
         }
         this.status = OrderStatus.CANCELLED;
-        this.registerEvent(new OrderCancelledEvent(this.id));
     }
 
     private Money calculateTotal() {
@@ -227,7 +225,7 @@ public record Email(String value) {
 
 - Аннотации Spring (`@Component`, `@Service`, `@Transactional`)
 - Аннотации JPA (`@Entity`, `@Table`, `@Column`)
-- Любые зависимости на фреймворки и библиотеки инфраструктурного уровня
+- Любые зависимости на фреймворки и библиотеки инфраструктурного уровня (исключение — Lombok: допустим как compile-time инструмент, не попадает в рантайм)
 - Порты и интерфейсы для внешних систем (определяются в Application)
 - Анемичные модели (сущности только с геттерами/сеттерами без поведения)
 - Ключевое слово `var` — все переменные с явным указанием типа
@@ -257,7 +255,7 @@ public class CreateOrderUseCaseImpl implements CreateOrderUseCase {
 
     private final OrderRepository orderRepository;
     private final PaymentGateway paymentGateway;
-    private final EventPublisher eventPublisher;
+    private final OrderDomainService orderDomainService;
     private final OrderApplicationMapper mapper;
 
     @Override
@@ -267,17 +265,14 @@ public class CreateOrderUseCaseImpl implements CreateOrderUseCase {
         CustomerId customerId = new CustomerId(command.customerId());
         List<OrderLine> lines = mapper.toOrderLines(command.items());
 
-        // 2. Вызов доменной логики
-        Order order = Order.create(customerId, lines);
+        // 2. Вызов доменной логики (DomainService создаёт агрегат и публикует события)
+        Order order = orderDomainService.createOrder(customerId, lines);
 
         // 3. Вызов исходящих портов
         paymentGateway.authorize(order.totalPrice(), customerId);
         orderRepository.save(order);
 
-        // 4. Публикация событий
-        order.domainEvents().forEach(eventPublisher::publish);
-
-        // 5. Возврат результата
+        // 4. Возврат результата
         return mapper.toResult(order);
     }
 }
@@ -392,7 +387,279 @@ public class BeanConfig {
 }
 ```
 
-### 1.6. Правила маппинга
+### 1.6. Базовые классы и события доменной модели
+
+Доменная модель строится на иерархии базовых абстракций. Все классы живут в модуле `domain`
+и не имеют зависимостей на фреймворки (кроме Lombok как compile-time инструмента).
+
+Иерархия наследования: [UML-диаграмма](diagrams/domain-model-hierarchy.puml)
+
+#### BaseId — типизированный идентификатор
+
+Неизменяемый объект-обёртка над примитивным идентификатором. Каждый агрегат определяет свой
+наследник (`PaymentId`, `OrderId` и т.д.), что исключает случайную подмену идентификаторов
+разных агрегатов на уровне типов.
+
+```java
+public abstract class BaseId<T> implements Serializable {
+  private final T value;
+
+  protected BaseId(final T value) {
+    this.value = value;
+  }
+
+  public T getValue() {
+    return value;
+  }
+
+  @Override
+  public boolean equals(final Object o) {
+    if (this == o) return true;
+    if (!(o instanceof BaseId<?> baseId)) return false;
+    return Objects.equals(value, baseId.value);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hashCode(value);
+  }
+}
+```
+
+#### BaseEntity — абстрактная сущность
+
+Базовый класс для всех сущностей домена. Идентичность определяется по `id` —
+две сущности с одинаковым `id` считаются равными независимо от остальных полей.
+`@SuperBuilder` обязателен для корректной работы Lombok Builder в наследниках.
+
+```java
+@SuperBuilder
+public abstract class BaseEntity<T> implements Serializable {
+  private T id;
+
+  public BaseEntity() {
+
+  }
+
+  public T getId() {
+    return id;
+  }
+
+  public void setId(final T id) {
+    this.id = id;
+  }
+
+  @Override
+  public boolean equals(final Object o) {
+    if (this == o) return true;
+    if (!(o instanceof BaseEntity<?> that)) return false;
+    return Objects.equals(id, that.id);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hashCode(id);
+  }
+}
+```
+
+#### AggregateRoot — маркер корня агрегата
+
+Корень агрегата — граница транзакционной консистентности. Только агрегаты сохраняются через
+репозитории. Сущность хранит исключительно бизнес-данные; публикация событий —
+ответственность `DomainService`.
+
+```java
+@SuperBuilder
+public abstract class AggregateRoot<T> extends BaseEntity<T> {
+
+  public AggregateRoot() {
+
+  }
+}
+```
+
+#### DomainEvent — интерфейс доменного события
+
+Событие — иммутабельный факт, произошедший в домене. Метод `fire()` делегирует публикацию
+в `DomainEventPublisher`, что позволяет доменному коду инициировать события без зависимости
+на инфраструктуру. Вызов `fire()` выполняется из `DomainService`, а не из сущности.
+
+```java
+public interface DomainEvent {
+  void fire();
+}
+```
+
+**DomainEventPublisher** — generic-интерфейс для публикации событий. Определяется в domain,
+реализуется в infrastructure. Типизация `<T extends DomainEvent>` гарантирует, что каждый
+publisher работает только со своим типом события.
+
+```java
+public interface DomainEventPublisher<T extends DomainEvent> {
+  void publish(T domainEvent);
+}
+```
+
+**EmptyEvent** — заглушка для случаев, когда бизнес-операция не порождает события.
+Singleton, избавляет от `null`-проверок и Optional-обёрток при работе с событиями.
+
+```java
+public final class EmptyEvent implements DomainEvent<Void> {
+
+  public static final EmptyEvent INSTANCE = new EmptyEvent();
+
+  private EmptyEvent() {
+  }
+
+  @Override
+  public void fire() {
+
+  }
+}
+```
+
+#### Пример реализации: Payment aggregate
+
+Ниже — полный пример агрегата `Payment` с типизированным идентификатором, иерархией событий
+и `DomainService` для публикации.
+
+**PaymentId** — типизированный идентификатор платежа:
+
+```java
+public class PaymentId extends BaseId<UUID> {
+
+    public PaymentId(UUID value) {
+        super(value);
+    }
+
+    // UUIDv7 — time-ordered, подходит для использования как PK в БД
+    public static PaymentId generate() {
+        UUID uuidV7 = Generators.timeBasedEpochGenerator().generate();
+        return new PaymentId(uuidV7);
+    }
+}
+```
+
+> **Почему UUIDv7, а не UUIDv4?**
+> UUIDv7 (RFC 9562) содержит метку времени в старших битах, поэтому значения монотонно возрастают.
+> Это критически важно для B-Tree индексов в БД: вставки идут «в конец» дерева, что устраняет
+> random page splits и значительно снижает write amplification. Для генерации используется
+> `com.fasterxml.uuid:java-uuid-generator` (`Generators.timeBasedEpochGenerator().generate()`).
+
+**Payment** — агрегат с бизнес-логикой:
+
+```java
+@Getter
+@SuperBuilder
+public class Payment extends AggregateRoot<PaymentId> {
+
+    private final Money amount;
+    private final CustomerId customerId;
+    private PaymentStatus status;
+
+    // Приватный конструктор — создание только через фабричный метод
+    private Payment(PaymentId id, Money amount, CustomerId customerId, PaymentStatus status) {
+        super(id);
+        this.amount = amount;
+        this.customerId = customerId;
+        this.status = status;
+    }
+
+    // ✅ Фабричный метод — единственная точка создания. UUIDv7, self-validation.
+    public static Payment create(Money amount, CustomerId customerId) {
+        if (amount == null || !amount.isPositive()) {
+            throw new DomainException("Payment amount must be positive");
+        }
+        return new Payment(PaymentId.generate(), amount, customerId, PaymentStatus.CREATED);
+    }
+
+    // ✅ Бизнес-метод с guard clause
+    public void confirm() {
+        if (this.status != PaymentStatus.CREATED) {
+            throw new DomainException("Only created payments can be confirmed");
+        }
+        this.status = PaymentStatus.CONFIRMED;
+    }
+
+    // ✅ Бизнес-метод
+    public void cancel() {
+        if (this.status == PaymentStatus.CONFIRMED) {
+            throw new DomainException("Cannot cancel confirmed payment");
+        }
+        this.status = PaymentStatus.CANCELLED;
+    }
+}
+```
+
+**PaymentEvent** — базовое событие агрегата Payment:
+
+Промежуточный абстрактный класс для всех событий, связанных с `Payment`.
+Содержит ссылку на агрегат и временную метку — общие поля для любого события платежа.
+
+```java
+@Getter
+@ToString
+@RequiredArgsConstructor
+@FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
+public abstract class PaymentEvent implements DomainEvent {
+  Payment payment;
+  LocalDateTime createdAt;
+}
+```
+
+**PaymentCreatedEvent** — конкретное доменное событие:
+
+Наследует `PaymentEvent`, добавляет ссылку на `DomainEventPublisher`. Если publisher
+не зарегистрирован — `fire()` бросает `PublisherNotPresentException`, что гарантирует
+корректную конфигурацию при старте приложения.
+
+```java
+public class PaymentCreatedEvent extends PaymentEvent {
+
+    DomainEventPublisher<PaymentCreatedEvent> publisher;
+
+    public PaymentCreatedEvent(final Payment payment,
+                               final LocalDateTime createdAt,
+                               final DomainEventPublisher<PaymentCreatedEvent> publisher) {
+        super(payment, createdAt);
+        this.publisher = publisher;
+    }
+
+    @Override
+    public void fire() {
+        if (publisher == null) {
+            throw new PublisherNotPresentException();
+        }
+    }
+}
+```
+
+**PaymentCreatedMessagePublisher** — порт для публикации `PaymentCreatedEvent`.
+Определяется в application (ports/out), реализуется в infrastructure (например, через Kafka или RabbitMQ).
+
+```java
+public interface PaymentCreatedMessagePublisher extends DomainEventPublisher<PaymentCreatedEvent> {
+}
+```
+
+**PaymentDomainService** — оркестрация и публикация событий:
+
+`DomainService` создаёт агрегат и публикует события. Сущности остаются чистыми —
+только данные и бизнес-правила, без побочных эффектов.
+
+```java
+public class PaymentDomainService {
+
+    public Payment createPayment(Money amount, CustomerId customerId) {
+        Payment payment = Payment.create(amount, customerId);
+        new PaymentCreatedEvent(payment.getId(), amount, customerId).fire();
+        return payment;
+    }
+}
+```
+
+### 1.7. Правила маппинга
 
 В DDD-варианте существуют три точки маппинга с отдельными маппер-классами:
 
@@ -1290,6 +1557,8 @@ public class OrderReadEntity {
 | Scheduled rebuild | Периодическая полная перестройка проекций | Eventual (задержка) | Аналитические запросы, отчёты |
 
 ---
+
+## Общие принципы
 
 ### Правила кодирования
 
