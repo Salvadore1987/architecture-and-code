@@ -1,18 +1,5 @@
 # Стандарты разработки Java / Spring Boot: архитектура и код
 
-> Единый свод правил для backend-сервисов на Java и Spring Boot.
-> Покрывает **слоистую (layered)** и **гексагональную (Ports & Adapters)** архитектуру —
-> с DDD, без DDD и с CQRS.
->
-> **Java:** 25 (LTS) · **Spring Boot:** 4.x · **Сборка:** Maven multi-module
-> **Документ объединяет и заменяет:** `JavaCodeStyleAndGuidelines_ru.md`, `JavaCodeStyle.md`,
-> `hexagonal-architecture-code-guidelines.md`, `hexagonal-ddd-code-style.md`,
-> `spring-boot-4-best-practices.md`
->
-> **Версия 3.0.** Целевая платформа стандарта — **Java 25 и Spring Boot 4.x**.
-> Части II–V описывают правила, не зависящие от версии платформы; Часть VI — обязательные
-> правила самой платформы 4.x и чеклист миграции для сервисов, ещё остающихся на 3.x.
-
 ---
 
 ## Содержание
